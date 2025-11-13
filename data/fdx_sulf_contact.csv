@@ -1,0 +1,10 @@
+﻿Type,ChainA,PosA,SetA,ChainB,PosB,SetB,Energy,Dist,BB,Freq,Cons,Area,AtomsA,AtomsB
+H,1-FDX1_fes_extracted.A,25,Leu90,2-FDX1_fes_extracted.A,1,FES2,-0.5,4.05,--,1,0,4.39,,
+H,1-FDX1_fes_extracted.A,39,Gly104,2-FDX1_fes_extracted.A,1,FES2,-5.6,3.62,b-,1,0,6.53,,
+C,1-FDX1_fes_extracted.A,41,Cys106,2-FDX1_fes_extracted.A,1,FES2,1,2.06,--,1,0,8.81,,
+H,1-FDX1_fes_extracted.A,43,Gly108,2-FDX1_fes_extracted.A,1,FES2,-4.9,3.48,b-,2,0,7.23,,
+H,1-FDX1_fes_extracted.A,45,Leu110,2-FDX1_fes_extracted.A,1,FES2,-4.2,3.97,*-,2,0,7.34,,
+H,1-FDX1_fes_extracted.A,46,Ala111,2-FDX1_fes_extracted.A,1,FES2,-7.4,3.69,b-,1,0,3.22,,
+CH,1-FDX1_fes_extracted.A,47,Cys112,2-FDX1_fes_extracted.A,1,FES2,-5.5,2.87,*-,2,0,12.73,,
+C,1-FDX1_fes_extracted.A,50,Cys115,2-FDX1_fes_extracted.A,1,FES2,1,2.05,--,1,0,11.59,,
+C,1-FDX1_fes_extracted.A,87,Cys152,2-FDX1_fes_extracted.A,1,FES2,1,2.07,--,1,0,8.59,,
