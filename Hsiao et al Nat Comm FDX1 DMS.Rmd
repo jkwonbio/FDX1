@@ -1,0 +1,605 @@
+---
+title: "Hsiao et al Nat Comm FDX1 DMS"
+output: html_document
+---
+
+
+#Load in relevant packages
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(reshape2))
+suppressPackageStartupMessages(require(dplyr))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(janitor))
+suppressPackageStartupMessages(library(magrittr))
+suppressPackageStartupMessages(library(ComplexHeatmap))
+suppressPackageStartupMessages(library(circlize))
+suppressPackageStartupMessages(library(ggrepel))
+suppressPackageStartupMessages(library(tidytext))
+suppressPackageStartupMessages(library(scales))
+suppressPackageStartupMessages(library(ggpubr))
+suppressPackageStartupMessages(library(corrplot))
+suppressPackageStartupMessages(library(RColorBrewer))
+```
+
+
+#Read in readcount data from FDX1 DMS screens, calculate LFC, QC filter
+```{r}
+#load in data
+FDX1_DMS <- read.csv(here::here("data", "File1_formatted_DNA0819_set2_collapsedToAA_counts_fractions_lognorm.csv"))
+
+# Create a new column called "mutation_type"
+FDX1_DMS %<>% mutate(mutation_type = ifelse(Vt_aa == "B", "silent", ifelse(Vt_aa == "X", "nonsense", ifelse(Wt_aa == Vt_aa, "silent", "missense"))))
+
+
+FDX1_DMS %<>% 
+  select(c("POS", "Wt_codon", "Vt_codon", "Wt_aa", "Vt_aa", "mutation_type"), contains("HEK"), contains("ABC"), contains("pMT_025"), -contains("2mM"), -contains("1mM"), -contains("lognorm")) %>% 
+    rename_with(~ gsub("Sample[0-9]+.", "", .x)) %>% 
+  mutate(VAR = paste(Wt_aa,POS,Vt_aa, sep = ""))
+
+
+#Mutate averages
+FDX1_DMS %<>% 
+  mutate(HEK293T_Day_0_i5RC_ct_frctn_MEAN = (HEK293T_Day_0_Rep_1_i5RC_ct_frctn + HEK293T_Day_0_Rep_2_i5RC_ct_frctn)/2) %>% 
+  mutate(HEK293T_10mM_Glucose_i5RC_ct_frctn_MEAN = (HEK293T_10mM_Glucose_Rep1_i5RC_ct_frctn + HEK293T_10mM_Glucose_Rep2_i5RC_ct_frctn)/2) %>% 
+  mutate(HEK293T_40nM_Es_i5RC_ct_frctn_MEAN = (HEK293T_40nM_Es_Rep1_i5RC_ct_frctn + HEK293T_40nM_Es_Rep2_i5RC_ct_frctn)/2) %>% 
+  mutate(HEK293T_20nM_Es_i5RC_ct_frctn_MEAN = (HEK293T_20nM_Es_Rep1_i5RC_ct_frctn + HEK293T_20nM_Es_Rep2_i5RC_ct)/2) %>% 
+  mutate(ABC1_Day_0_i5RC_ct_frctn_MEAN = (ABC1_Day_0_Rep_1_i5RC_ct_frctn + ABC1_Day_0_Rep_2_i5RC_ct_frctn)/2) %>% 
+  mutate(ABC1_10mM_Glucose_i5RC_ct_frctn_MEAN = (ABC1_10mM_Glucose_Rep1_i5RC_ct_frctn + ABC1_10mM_Glucose_Rep2_i5RC_ct_frctn)/2) %>% 
+  mutate(ABC1_5nM_Es_i5RC_ct_frctn_MEAN = (ABC1_5nM_Es_Rep1_i5RC_ct_frctn + ABC1_5nM_Es_Rep2_i5RC_ct_frctn)/2) %>% 
+  mutate(ABC1_Day_0_i5RC_ct_frctn_MEAN = (ABC1_Day_0_Rep_1_i5RC_ct_frctn + ABC1_Day_0_Rep_2_i5RC_ct_frctn)/2)
+
+
+# calculate log fold changes using fraction but first determine the appropriate cuttoff of the pDNA distribution to understand those variants not well represented
+FDX1_DMS %<>% 
+  filter(HEK293T_10mM_Glucose_i5RC_ct_frctn_MEAN != 0 & ABC1_10mM_Glucose_i5RC_ct_frctn_MEAN != 0) %>%
+  mutate(HEK293T_20nM_Es_vs_10mM_Glucose_LFC = log2(HEK293T_20nM_Es_i5RC_ct_frctn_MEAN/HEK293T_10mM_Glucose_i5RC_ct_frctn_MEAN)) %>% 
+  mutate(HEK293T_40nM_Es_vs_10mM_Glucose_LFC = log2(HEK293T_40nM_Es_i5RC_ct_frctn_MEAN/HEK293T_10mM_Glucose_i5RC_ct_frctn_MEAN)) %>% 
+  mutate(ABC1_5nM_Es_vs_10mM_Glucose_LFC = log2(ABC1_5nM_Es_i5RC_ct_frctn_MEAN/ABC1_10mM_Glucose_i5RC_ct_frctn_MEAN)) 
+
+
+#Remove -INF values, and day0 produced by endpoint 0's
+FDX1_DMS %<>% 
+  mutate(HEK293T_20nM_Es_vs_10mM_Glucose_LFC = ifelse(is.infinite(HEK293T_20nM_Es_vs_10mM_Glucose_LFC) & HEK293T_20nM_Es_vs_10mM_Glucose_LFC == -Inf, NA, HEK293T_20nM_Es_vs_10mM_Glucose_LFC)) %>%
+  mutate(HEK293T_40nM_Es_vs_10mM_Glucose_LFC = ifelse(is.infinite(HEK293T_40nM_Es_vs_10mM_Glucose_LFC) & HEK293T_40nM_Es_vs_10mM_Glucose_LFC == -Inf, NA, HEK293T_40nM_Es_vs_10mM_Glucose_LFC)) %>%
+  mutate(ABC1_5nM_Es_vs_10mM_Glucose_LFC = ifelse(is.infinite(ABC1_5nM_Es_vs_10mM_Glucose_LFC) & ABC1_5nM_Es_vs_10mM_Glucose_LFC == -Inf, NA, ABC1_5nM_Es_vs_10mM_Glucose_LFC)) %>% 
+    mutate(day0_greater_than_0 = ifelse(HEK293T_Day_0_i5RC_ct_frctn_MEAN > 0, ">0", "0"))
+```
+
+#scale LFC to silent and nonsense
+```{r}
+#Scale DMS log fold change (LFC) data, centered at mean silent and scaled to mean of nonsense
+#some double 'B' silent mutants for certain positions, so take the average
+Final_FDX <- FDX1_DMS %>% 
+  select(POS, Wt_aa, Vt_aa, HEK293T_40nM_Es_vs_10mM_Glucose_LFC, ABC1_5nM_Es_vs_10mM_Glucose_LFC)  %>% 
+  mutate(VAR = paste(Wt_aa, POS, Vt_aa, sep ="")) %>% 
+  group_by(VAR) %>% 
+  summarize(HEK293T_40nM_Es_vs_10mM_Glucose_LFC = mean(HEK293T_40nM_Es_vs_10mM_Glucose_LFC),
+            ABC1_5nM_Es_vs_10mM_Glucose_LFC = mean(ABC1_5nM_Es_vs_10mM_Glucose_LFC))
+
+Final_FDX <- FDX1_DMS %>% select(POS, Wt_aa, Vt_aa) %>% 
+    mutate(VAR = paste(Wt_aa, POS, Vt_aa, sep ="")) %>% 
+  distinct() %>% 
+  left_join(Final_FDX, by = "VAR") 
+
+
+#Normalize/scale HEK293T screen, between "B" silent and "X" nonsense
+
+HEK293T_40nM_Es_vs_10mM_Glucose_LFC <- Final_FDX %>% 
+  dplyr::select(c(POS, Wt_aa, Vt_aa, HEK293T_40nM_Es_vs_10mM_Glucose_LFC)) %>%
+  mutate(WT_POS = paste(Wt_aa, POS, sep ="")) %>% 
+    dplyr::select(c(WT_POS, Vt_aa, HEK293T_40nM_Es_vs_10mM_Glucose_LFC)) %>%
+  pivot_wider(names_from = WT_POS, values_from = HEK293T_40nM_Es_vs_10mM_Glucose_LFC) %>%
+  column_to_rownames(var = "Vt_aa") %>%
+  as.matrix() 
+
+#B is silent
+silent_effect <- HEK293T_40nM_Es_vs_10mM_Glucose_LFC['B',] %>% mean(na.rm=T)
+
+tmp <- HEK293T_40nM_Es_vs_10mM_Glucose_LFC - silent_effect
+
+#X is nonsense
+nonsense_effect <- tmp['X',] %>% mean(na.rm=T)
+
+rescaled1 <- tmp/abs(nonsense_effect)
+
+rescaled1['X',] %>% mean(na.rm=T)
+rescaled1['B',] %>% mean(na.rm=T)
+
+#Normalize/scale ABCB1, between "B" silent and "X" nonsense
+
+ABC1_5nM_Es_vs_10mM_Glucose_LFC <- Final_FDX %>% 
+  dplyr::select(c(POS, Wt_aa, Vt_aa, ABC1_5nM_Es_vs_10mM_Glucose_LFC)) %>%
+  mutate(WT_POS = paste(Wt_aa, POS, sep ="")) %>% 
+    dplyr::select(c(WT_POS, Vt_aa, ABC1_5nM_Es_vs_10mM_Glucose_LFC)) %>%
+  pivot_wider(names_from = WT_POS, values_from = ABC1_5nM_Es_vs_10mM_Glucose_LFC) %>%
+  column_to_rownames(var = "Vt_aa") %>%
+  as.matrix() 
+
+#B is silent
+silent_effect <- ABC1_5nM_Es_vs_10mM_Glucose_LFC['B',] %>% mean(na.rm=T)
+
+tmp <- ABC1_5nM_Es_vs_10mM_Glucose_LFC - silent_effect
+
+#X is nonsense
+nonsense_effect <- tmp['X',] %>% mean(na.rm=T)
+
+rescaled2 <- tmp/abs(nonsense_effect)
+
+rescaled2['X',] %>% mean(na.rm=T)
+rescaled2['B',] %>% mean(na.rm=T)
+
+```
+
+#Recombine scaled data and export final data table
+```{r}
+#re-add meta data to HEK293T screen data
+HEK293T <- rescaled1 %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Vt_aa") %>% 
+  pivot_longer(col = 2:ncol(.), names_to = "WT_POS", values_to = "scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC") %>% 
+  mutate(VAR = paste(WT_POS, Vt_aa, sep = "")) %>% 
+  mutate(POS = as.integer(str_extract(WT_POS, "\\d+"))) %>% 
+    mutate(Wt_aa = str_sub(WT_POS, 1,1)) %>% 
+  mutate(mutation_type = ifelse(Vt_aa == "B", "silent", ifelse(Vt_aa == "X", "nonsense", ifelse(Wt_aa == Vt_aa, "silent", "missense")))) %>% 
+  select(VAR, scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC)
+  
+
+#re-add meta data to ABCB1 screen data
+ABC1 <- rescaled2 %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Vt_aa") %>% 
+  pivot_longer(col = 2:ncol(.), names_to = "WT_POS", values_to = "scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC") %>% 
+  mutate(VAR = paste(WT_POS, Vt_aa, sep = "")) %>% 
+  mutate(POS = as.integer(str_extract(WT_POS, "\\d+"))) %>% 
+    mutate(Wt_aa = str_sub(WT_POS, 1,1)) %>% 
+  mutate(mutation_type = ifelse(Vt_aa == "B", "silent", ifelse(Vt_aa == "X", "nonsense", ifelse(Wt_aa == Vt_aa, "silent", "missense"))))
+
+final_combined_tidy <- ABC1 %>% 
+  select(c(VAR, POS, WT_POS, Wt_aa, Vt_aa, mutation_type, scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC)) %>% 
+  left_join(HEK293T)
+
+#write out variant level supplemental file for DMS screens
+final_combined_tidy %>% 
+  write.csv(here::here("results", "FDX1_finalized_scaled_LFC_variant_level.csv"))
+```
+
+#Produce averages and export datafile (positional collapsed based on biophysical groupings of AA substitutions and positional average file)
+
+HEK293T Averaging out positionally based on biopphysical features
+```{r}
+# Amino acid level features -----------------------------------------------
+aa_groups = list("HEK_Neg_Acidic"= c("D", "E"),
+     "HEK_Pos_Basic"= c("K", "R"),
+     "HEK_Polar_uncharged"= c("S", "T", "C", "Y", "N", "Q"),
+     "HEK_Non-polar_non-aromatic"= c("G", "A", "V", "L", "I", "M"),
+     "HEK_Helix_Breaker"= c("G", "P"),
+     "HEK_Aromatic"= c("F","W", "Y", "H"))
+
+
+tmp1 <- map_df(aa_groups, function(x) colMeans(rescaled1[x,],na.rm = T), .id = "group") %>% 
+  pivot_longer(names_to = "POS", values_to = "Score", -group) %>% 
+  mutate(Index= as.numeric(POS)) %>% 
+  pivot_wider(names_from = group, values_from = Score) %>% 
+  mutate(POS = as.integer(str_extract(POS, "\\d+"))) %>% 
+  select(-Index) 
+write.csv(tmp1, here::here('results','HEK293_aa_group_average_per_position.csv'))
+```
+
+ABC1 Averaging out positionally based on biopphysical features
+```{r}
+
+# Amino acid level features -----------------------------------------------
+aa_groups = list("ABC_Neg_Acidic"= c("D", "E"),
+     "ABC_Pos_Basic"= c("K", "R"),
+     "ABC_Polar_uncharged"= c("S", "T", "C", "Y", "N", "Q"),
+     "ABC_Non-polar_non-aromatic"= c("G", "A", "V", "L", "I", "M"),
+     "ABC_Helix_Breaker"= c("G", "P"),
+     "ABC_Aromatic"= c("F","W", "Y", "H"))
+
+
+tmp2 <- map_df(aa_groups, function(x) colMeans(rescaled2[x,],na.rm = T), .id = "group") %>% 
+  pivot_longer(names_to = "POS", values_to = "Score", -group) %>% 
+  mutate(Index= as.numeric(POS)) %>% 
+  pivot_wider(names_from = group, values_from = Score) %>% 
+  mutate(POS = as.integer(str_extract(POS, "\\d+"))) %>% 
+  select(-Index) 
+write.csv(tmp2, here::here('results','ABC1_aa_group_average_per_position.csv'))
+```
+#average positional data combined
+```{r}
+final_combined_tidy %>% 
+  filter(mutation_type == "missense") %>% 
+  group_by(POS) %>% 
+  summarize(AVG_scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC = mean(scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC, na.rm = TRUE),
+         AVG_scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC = mean(scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC, na.rm = TRUE)) %>% 
+  full_join(tmp1) %>% 
+  full_join(tmp2) %>% 
+  write.csv(here::here("results","FDX1_scaled_combined_positional.csv"))
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+Positional <- read.csv(here::here("data", "FDX1_positional_meta_file.csv"))
+
+# Helper to save as PDF
+save_pdf <- function(p, file, width = 6, height = 6, family = "Helvetica") {
+  pdf(file = file, width = width, height = height, family = family)
+  print(p)
+  dev.off()
+}
+
+# Build the base data
+base_df <- Positional %>%
+  full_join(tmp1) %>%
+  full_join(tmp2) %>%
+  select(POS, FDX1AA, contains("HEK"), contains("ABC"), avgMutateX)
+
+# Plot 1
+p1 <- ggplot(base_df, aes(AVG_scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC, avgMutateX, color = FDX1AA)) +
+  geom_hline(yintercept = 0, color = "black", size = 0.3) +
+  geom_vline(xintercept = 0, color = "black", size = 0.3) +
+  geom_point(size = 4, alpha = 0.5) +
+  theme_bw()
+
+# Plot 2
+p2 <- ggplot(base_df, aes(HEK_Pos_Basic, avgMutateX, color = FDX1AA)) +
+  geom_hline(yintercept = 0, color = "black", size = 0.3) +
+  geom_vline(xintercept = 0, color = "black", size = 0.3) +
+  geom_point(size = 4, alpha = 0.5) +
+  theme_bw()
+
+# Plot 3 (duplicate of 1)
+p3 <- p1
+
+# Plot 4
+p4 <- ggplot(base_df, aes(ABC_Pos_Basic, avgMutateX, color = FDX1AA)) +
+  geom_hline(yintercept = 0, color = "black", size = 0.3) +
+  geom_vline(xintercept = 0, color = "black", size = 0.3) +
+  geom_point(size = 4, alpha = 0.5) +
+  theme_bw()
+
+# Save them
+save_pdf(p1, here::here("results", "plot_HEK_avgScaled_vs_avgMutateX.pdf"), width = 6, height = 6)
+save_pdf(p2,here::here("results",  "plot_HEK_Pos_Basic_vs_avgMutateX.pdf"), width = 7.5, height = 6)
+save_pdf(p3, here::here("results", "plot_HEK_avgScaled_vs_avgMutateX_dup.pdf"), width = 6, height = 6)
+save_pdf(p4,here::here("results",  "plot_ABC_Pos_Basic_vs_avgMutateX.pdf"), width = 7.5, height = 6)
+```
+
+Fig2B
+```{r}
+# Calculate correlation
+cor_test <- cor.test(
+  final_combined_tidy$scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC,
+  final_combined_tidy$scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC
+)
+
+cor_label <- sprintf(
+  "r = %.2f, p = %.2g",
+  cor_test$estimate,
+  cor_test$p.value
+)
+
+final_combined_tidy %>%
+  ggplot(aes(
+    scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC,
+    scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC,
+    color = mutation_type,
+    label = VAR
+  )) +
+  geom_hline(yintercept = 0, color = "black", size = 0.3) +
+  geom_vline(xintercept = 0, color = "black", size = 0.3) +
+  geom_point(size = 2, alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed") +
+  annotate("text", 
+           x = min(final_combined_tidy$scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC, na.rm = TRUE), 
+           y = max(final_combined_tidy$scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC, na.rm = TRUE), 
+           label = cor_label,
+           hjust = 0, vjust = 1, size = 4) +
+  theme_bw()
+
+plot_data <- final_combined_tidy %>%
+  # remove silent mutations
+  filter(mutation_type != "silent") %>%
+  mutate(
+    color_custom = case_when(
+      mutation_type == "nonsense" ~ "green4", # nonsense = green
+      VAR %in% c("D139R", "D139K", "D136R", "D136K") ~ "darkred", # highlighted variants
+      POS %in% c(136, 139) ~ "pink3", # other 136/139 positions
+      TRUE ~ "black" # all else
+    ),
+    shape_custom = case_when(
+      mutation_type == "nonsense" ~ 15, # square
+      VAR %in% c("D139R", "D139K", "D136R", "D136K") ~ 19, # filled circle
+      POS %in% c(136, 139) ~ 19, # filled circle
+      TRUE ~ 1 # open circle
+    ),
+    label_custom = ifelse(VAR %in% c("D139R", "D139K", "D136R", "D136K"), VAR, NA)
+  )
+
+tmp_graph <- ggplot(plot_data, aes(
+  x = scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC,
+  y = scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC
+)) +
+  geom_hline(yintercept = 0, color = "black", size = 0.3) +
+  geom_vline(xintercept = 0, color = "black", size = 0.3) +
+  geom_point(data = . %>% 
+               filter(color_custom == "black"),
+    aes(color = color_custom, shape = shape_custom), size = 4, alpha = 0.2) +
+    geom_point(data = . %>% 
+               filter( mutation_type == "nonsense"), 
+             aes(color = color_custom, shape = shape_custom), size = 4, alpha = 0.4) +
+    geom_point(data = . %>% 
+               filter(POS %in% c(136, 139) & !VAR %in% c("D139R", "D139K", "D136R", "D136K")),
+             aes(color = color_custom, shape = shape_custom), size = 4, alpha = 0.7) +
+  geom_point(data = . %>% 
+               filter(VAR %in% c("D139R", "D139K", "D136R", "D136K")), 
+             aes(color = color_custom, shape = shape_custom), size = 4) +
+  geom_text_repel(aes(label = label_custom), color = "darkred", vjust = -1, size = 4) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed") +
+  annotate(
+    "text",
+    x = min(final_combined_tidy$scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC, na.rm = TRUE),
+    y = max(final_combined_tidy$scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC, na.rm = TRUE),
+    label = cor_label,
+    hjust = 0, vjust = 1, size = 4
+  ) +
+  scale_color_identity() +
+  scale_shape_identity() +
+  theme_bw() +
+  labs(
+    x = "HEK293 Scaled LFC",
+    y = "ABC1 Scaled LFC"
+  )
+
+ggsave(
+  filename = here::here("results", "Fig_2B_.pdf"),
+  plot = tmp_graph,  # or replace with your ggplot object
+  device = cairo_pdf,
+  dpi = 600,
+  width = 6,  # adjust dimensions as needed
+  height = 6,
+  units = "in"
+)
+```
+#ABCB1 Heatmap
+```{r}
+
+options(datatable.fread.datatable = FALSE)
+
+
+######### ABC Heatmap ##########
+
+
+data_pull <- "scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC"
+
+tmp <- fread(here::here("results", "FDX1_finalized_scaled_LFC_variant_level.csv")) %>%
+  select(!!sym(data_pull))  # Convert string to column reference
+
+stats <- tmp %>%
+  summarise(
+    sd_value = sd(!!sym(data_pull), na.rm = TRUE)  # Convert string to column reference
+  ) %>%
+  mutate(
+    one_sd_below_0 = 0 - sd_value,
+    two_sd_above_0 = 0 + 2 * sd_value
+  )
+
+
+order <- fread(here::here("data", "colnames_rownames_wt.csv")) %>%
+  tibble::column_to_rownames("amino_acid") # %>%
+  #dplyr::filter(!row.names(.) == "X") # removed the nonsense mut - can include later in the processing upstream if necessary
+data <- fread(here::here("results", "FDX1_finalized_scaled_LFC_variant_level.csv")) %>%
+  dplyr::select(WT_POS, Vt_aa, scaled_ABC1_5nM_Es_vs_10mM_Glucose_LFC) %>% # comparison used for the paper
+  reshape2::dcast(Vt_aa ~ WT_POS, value.var = data_pull) %>%
+    filter(Vt_aa != "B") %>% 
+  tibble::column_to_rownames("Vt_aa") %>%
+  .[rownames(order), colnames(order)]
+
+annotation <- fread(here::here("data","FDX1_positional_meta_file.csv")) %>%
+    select(WT_POS, Secondary, avgMutateX, Iron_Sulfer_Binding) %>% 
+  dplyr::arrange(match(WT_POS, colnames(data))) %>%
+  dplyr::mutate(across(c(Secondary, Iron_Sulfer_Binding), ~ ifelse(.x == "", "None", .x))) %>% 
+    dplyr::mutate(across(c(Secondary, Iron_Sulfer_Binding), ~ replace_na(.x, "None")))  %>%
+  mutate(Secondary = case_when(
+    Secondary == "H" ~ "α-helix",
+    Secondary == "S" ~ "β-strand",
+    TRUE ~ Secondary  # Keep the original value if no condition is met
+  ))
+
+
+
+# --- Residues to label on the heatmap --- #
+
+labels <- which(colnames(data) %in% c("S46", "E48","A47","C106", "C112", "C115", "C152", "D136", "D139")) # residues of interest to label 
+
+position_labels <- columnAnnotation(foo = anno_mark(at = labels, 
+                                                    labels = colnames(data[labels]),
+                                                    labels_rot = 90,
+                                                    link_width = unit(3, "mm"),
+                                                    which = "column",
+                                                    side = "bottom",
+                                                    labels_gp = gpar(fontsize = 7.5)))
+
+# --- color scale --- #
+
+min <- -1
+mid <- 0
+max <- 1
+score <- "Scaled Log2FC"
+
+a <- min + round(((mid-min) / 3), digits = 1)
+b <- mid - round(((mid-min) / 3), digits = 1)
+c <- mid + (round(((max-mid) / 3), digits = 1))
+d <- max - round(((max-mid) / 3), digits = 1)
+
+col_fun = colorRamp2(c(min, a, b, mid, c, d, max), c("#A5CDEF","#D4EDF9","#F7FCFD","#FFFFFF","#FFE3DE","#F88981","#D10025"))
+
+top_annotation = HeatmapAnnotation(
+  Secondary = annotation$Secondary, 
+  Iron_Sulfer_Binding = annotation$Iron_Sulfer_Binding,
+  avgMutateX = anno_lines(annotation$avgMutateX, height = unit(1, "cm")),
+  annotation_label = gt_render(c("**Secondary structure**",
+                                 "**Iron Sulfer Binding**",
+                                 "**Avg ddG**"),
+                               gp = gpar(fontsize = 6)),
+  col = list(Secondary = c("α-helix" = "brown4",
+                           "β-strand" = "green4",
+                          "None" = "white"),
+             Iron_Sulfer_Binding = c("Yes" = "black", "None" = "white")), 
+  show_legend = c(T,T,T),
+  na_col = "white",
+  gap = unit(0, "mm"),
+  annotation_legend_param = list(border = "black"),
+  border = TRUE,
+  simple_anno_size = unit(3, "mm"),
+  show_annotation_name = c(T,T,T),
+  annotation_name_side = "left")
+  
+  pdf(here::here("results", "ABC1_Heatmap.pdf"),  width = 12, height = 4)   # Convert cm to inches
+
+draw(Heatmap(as.matrix(data), 
+               col = col_fun,
+               heatmap_legend_param = list(title = "scaled LFC", at = c(min, 0, max), border = "black"),
+               row_names_gp = gpar(fontsize = 5),
+               column_names_gp = gpar(fontsize = 3.3),
+               top_annotation = top_annotation,
+               bottom_annotation = position_labels,
+               cluster_rows = F,
+               cluster_columns = F,
+               column_km = NULL,
+               row_gap = unit(0.75, "mm"),
+               na_col = "grey50",
+               show_row_names = TRUE,
+               show_column_names = FALSE,
+               row_names_side = "left",
+               row_dend_reorder = TRUE,
+               column_dend_reorder = TRUE,
+               show_row_dend = TRUE,
+               width = unit(15, "cm"),
+               height = unit(5, "cm"),
+               border_gp = gpar(col = "black", lty = 1),
+               rect_gp = gpar(col = "white", lwd = 0.05)))
+  
+  dev.off()
+```
+
+```{r}
+data_pull <- "scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC"
+
+tmp <- fread(here::here("results", "FDX1_finalized_scaled_LFC_variant_level.csv")) %>%
+  select(!!sym(data_pull))  # Convert string to column reference
+
+stats <- tmp %>%
+  summarise(
+    sd_value = sd(!!sym(data_pull), na.rm = TRUE)  # Convert string to column reference
+  ) %>%
+  mutate(
+    one_sd_below_0 = 0 - sd_value,
+    two_sd_above_0 = 0 + 2 * sd_value
+  )
+
+
+order <- fread(here::here("data", "colnames_rownames_wt.csv")) %>%
+  tibble::column_to_rownames("amino_acid") # %>%
+  #dplyr::filter(!row.names(.) == "X") # removed the nonsense mut - can include later in the processing upstream if necessary
+data <- fread(here::here("results", "FDX1_finalized_scaled_LFC_variant_level.csv")) %>%
+  dplyr::select(WT_POS, Vt_aa, scaled_HEK293T_40nM_Es_vs_10mM_Glucose_LFC) %>% # comparison used for the paper
+  reshape2::dcast(Vt_aa ~ WT_POS, value.var = data_pull) %>%
+      filter(Vt_aa != "B") %>% 
+  tibble::column_to_rownames("Vt_aa") %>%
+  .[rownames(order), colnames(order)]
+
+annotation <- fread(here::here("data","FDX1_positional_meta_file.csv")) %>%
+    select(WT_POS, Secondary, avgMutateX, Iron_Sulfer_Binding) %>% 
+  dplyr::arrange(match(WT_POS, colnames(data))) %>%
+  dplyr::mutate(across(c(Secondary, Iron_Sulfer_Binding), ~ ifelse(.x == "", "None", .x))) %>% 
+    dplyr::mutate(across(c(Secondary, Iron_Sulfer_Binding), ~ replace_na(.x, "None")))  %>%
+  mutate(Secondary = case_when(
+    Secondary == "H" ~ "α-helix",
+    Secondary == "S" ~ "β-strand",
+    TRUE ~ Secondary  # Keep the original value if no condition is met
+  ))
+
+
+
+# --- Residues to label on the heatmap --- #
+
+labels <- which(colnames(data) %in% c("C106", "C112", "C115", "C152", "D136", "D139")) # residues of interest to label 
+
+position_labels <- columnAnnotation(foo = anno_mark(at = labels, 
+                                                    labels = colnames(data[labels]),
+                                                    labels_rot = 90,
+                                                    link_width = unit(3, "mm"),
+                                                    which = "column",
+                                                    side = "bottom",
+                                                    labels_gp = gpar(fontsize = 7.5)))
+
+# --- color scale --- #
+
+min <- -1.5
+mid <- 0
+max <- 2
+score <- "Scaled Log2FC"
+
+a <- min + round(((mid-min) / 3), digits = 1)
+b <- mid - round(((mid-min) / 3), digits = 1)
+c <- mid + (round(((max-mid) / 3), digits = 1))
+d <- max - round(((max-mid) / 3), digits = 1)
+
+col_fun = colorRamp2(c(min, a, b, mid, c, d, max), c("#A5CDEF","#D4EDF9","#F7FCFD","#FFFFFF","#FFE3DE","#F88981","#D10025"))
+
+
+top_annotation = HeatmapAnnotation(
+  Secondary = annotation$Secondary, 
+  Iron_Sulfer_Binding = annotation$Iron_Sulfer_Binding,
+  avgMutateX = anno_lines(annotation$avgMutateX, height = unit(1, "cm")),
+  annotation_label = gt_render(c("**Secondary structure**",
+                                 "**Iron Sulfer Binding**",
+                                 "**Avg ddG**"),
+                               gp = gpar(fontsize = 6)),
+  col = list(Secondary = c("α-helix" = "brown4",
+                           "β-strand" = "green4",
+                          "None" = "white"),
+             Iron_Sulfer_Binding = c("Yes" = "black", "None" = "white")), 
+  show_legend = c(T,T,T),
+  na_col = "white",
+  gap = unit(0, "mm"),
+  annotation_legend_param = list(border = "black"),
+  border = TRUE,
+  simple_anno_size = unit(3, "mm"),
+  show_annotation_name = c(T,T,T),
+  annotation_name_side = "left")
+  
+  pdf(here::here("results", "HEK293T_Heatmap.pdf"), width = 12, height = 4)  # Convert cm to inches
+
+  draw(Heatmap(as.matrix(data), 
+               col = col_fun,
+               heatmap_legend_param = list(title = "scaled LFC", at = c(min, 0, max), border = "black"),
+               row_names_gp = gpar(fontsize = 5),
+               column_names_gp = gpar(fontsize = 3.3),
+               top_annotation = top_annotation,
+               bottom_annotation = position_labels,
+               cluster_rows = F,
+               cluster_columns = F,
+               column_km = NULL,
+               row_gap = unit(0.75, "mm"),
+               na_col = "grey50",
+               show_row_names = TRUE,
+               show_column_names = FALSE,
+               row_names_side = "left",
+               row_dend_reorder = TRUE,
+               column_dend_reorder = TRUE,
+               show_row_dend = TRUE,
+               width = unit(15, "cm"),
+               height = unit(5, "cm"),
+               border_gp = gpar(col = "black", lty = 1),
+               rect_gp = gpar(col = "white", lwd = 0.05)))
+  
+  dev.off()
+
+```
+
